@@ -1,0 +1,22 @@
+# Environment variables
+.env
+
+# Docker volumes (local data)
+ollama-data/
+open-webui-data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node (if any tooling added later)
+node_modules/
+
+# Claude Code
+.claude/
