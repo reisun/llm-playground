@@ -6,6 +6,8 @@ services:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
+    networks:
+      - llm-network
     restart: unless-stopped
 
   open-webui:
@@ -17,6 +19,8 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
     volumes:
       - open-webui-data:/app/backend/data
+    networks:
+      - llm-network
     depends_on:
       - ollama
     restart: unless-stopped
@@ -24,3 +28,8 @@ services:
 volumes:
   ollama-data:
   open-webui-data:
+
+networks:
+  llm-network:
+    name: llm-network
+    driver: bridge
