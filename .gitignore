@@ -18,5 +18,12 @@ Thumbs.db
 # Node (if any tooling added later)
 node_modules/
 
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+
 # Claude Code
 .claude/

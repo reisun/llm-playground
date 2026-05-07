@@ -12,6 +12,29 @@ services:
       - llm-network
     restart: unless-stopped
 
+  agent-gateway:
+    build: ./agent-gateway
+    container_name: agent-gateway
+    volumes:
+      - ~/.claude:/mnt/claude:ro
+      - ~/.config/gh:/mnt/gh:ro
+      - /home/reisun/workspace:/workspace
+    networks:
+      - llm-network
+    restart: unless-stopped
+
+  internal-proxy:
+    image: nginx:alpine
+    container_name: llm-internal-proxy
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - llm-network
+    depends_on:
+      - ollama
+      - agent-gateway
+    restart: unless-stopped
+
 volumes:
   ollama-data:
 
