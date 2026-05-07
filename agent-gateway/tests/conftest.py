@@ -11,7 +11,7 @@ def _reset_job_queue():
     """Reset the global job queue before each test."""
     job_queue.jobs.clear()
     job_queue.queue.clear()
-    job_queue.current_job_id = None
+    job_queue.running_job_ids.clear()
     yield
 
 

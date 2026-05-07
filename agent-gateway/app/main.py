@@ -1,5 +1,6 @@
 """Agent Gateway - HTTP API for invoking Claude Code and Codex CLI agents."""
 
+import os
 import subprocess
 import threading
 import time
@@ -10,6 +11,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
+
+MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "4"))
 
 app = FastAPI(title="Agent Gateway", version="0.1.0")
 
@@ -135,12 +138,14 @@ def build_command(req: RunRequest) -> tuple[list[str], str]:
 
 
 class JobQueue:
-    def __init__(self) -> None:
+    def __init__(self, max_workers: int = MAX_CONCURRENT_JOBS) -> None:
         self.jobs: dict[str, Job] = {}
         self.queue: deque[str] = deque()
-        self.current_job_id: str | None = None
+        self.running_job_ids: set[str] = set()
         self.lock = threading.Lock()
-        self.worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self.semaphore = threading.Semaphore(max_workers)
+        self.max_workers = max_workers
+        self.worker_thread = threading.Thread(target=self._dispatcher, daemon=True)
         self.worker_thread.start()
 
     def submit(self, request: RunRequest) -> Job:
@@ -171,6 +176,7 @@ class JobQueue:
                 job.process.kill()
                 job.status = JobStatus.cancelled
                 job.end_time = time.time()
+                self.running_job_ids.discard(job_id)
                 return True
         return False
 
@@ -185,24 +191,41 @@ class JobQueue:
     def queue_length(self) -> int:
         return len(self.queue)
 
-    def _worker(self) -> None:
+    @property
+    def current_job_id(self) -> str | None:
+        with self.lock:
+            ids = list(self.running_job_ids)
+            return ids[0] if len(ids) == 1 else None
+
+    def _dispatcher(self) -> None:
         while True:
+            self.semaphore.acquire()
             job_id = None
-            with self.lock:
-                if self.queue:
-                    job_id = self.queue.popleft()
-                    self.current_job_id = job_id
-            if job_id is None:
-                time.sleep(0.1)
-                continue
+            while job_id is None:
+                with self.lock:
+                    if self.queue:
+                        job_id = self.queue.popleft()
+                if job_id is None:
+                    time.sleep(0.1)
+
             job = self.jobs[job_id]
             if job.status == JobStatus.cancelled:
-                with self.lock:
-                    self.current_job_id = None
+                self.semaphore.release()
                 continue
-            self._execute(job)
+
             with self.lock:
-                self.current_job_id = None
+                self.running_job_ids.add(job_id)
+
+            thread = threading.Thread(target=self._run_and_release, args=(job,), daemon=True)
+            thread.start()
+
+    def _run_and_release(self, job: Job) -> None:
+        try:
+            self._execute(job)
+        finally:
+            with self.lock:
+                self.running_job_ids.discard(job.job_id)
+            self.semaphore.release()
 
     def _execute(self, job: Job) -> None:
         job.status = JobStatus.running
@@ -296,5 +319,6 @@ def health() -> dict:
     return {
         "status": "ok",
         "queue_length": job_queue.queue_length,
-        "current_job": job_queue.current_job_id,
+        "running_jobs": sorted(job_queue.running_job_ids),
+        "max_concurrent": job_queue.max_workers,
     }

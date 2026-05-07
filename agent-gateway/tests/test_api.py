@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from app.main import (
     AgentType,
+    Job,
     JobStatus,
     PermissionLevel,
     RunRequest,
@@ -13,6 +14,9 @@ from app.main import (
     build_command,
     job_queue,
 )
+
+MAX_POLL = 50
+POLL_SLEEP = 0.05
 
 # --- Health endpoint ---
 
@@ -24,11 +28,14 @@ class TestHealth:
         data = resp.json()
         assert data["status"] == "ok"
         assert "queue_length" in data
-        assert "current_job" in data
+        assert "running_jobs" in data
 
     def test_health_queue_length_zero(self, client):
         resp = client.get("/health")
-        assert resp.json()["queue_length"] == 0
+        data = resp.json()
+        assert data["queue_length"] == 0
+        assert data["running_jobs"] == []
+        assert "max_concurrent" in data
 
 
 # --- POST /agent/run ---
@@ -224,6 +231,16 @@ class TestBuildCommand:
 # --- Job lifecycle with mocked subprocess ---
 
 
+def _wait_for_job(job_id: str, *terminal: JobStatus) -> Job:
+    targets = terminal or (JobStatus.done, JobStatus.failed)
+    for _ in range(MAX_POLL):
+        job = job_queue.get(job_id)
+        if job and job.status in targets:
+            return job
+        time.sleep(POLL_SLEEP)
+    return job_queue.get(job_id)
+
+
 class TestJobLifecycle:
     @patch("app.main.subprocess.Popen")
     def test_job_completes_successfully(self, mock_popen, client):
@@ -234,13 +251,7 @@ class TestJobLifecycle:
 
         resp = client.post("/agent/run", json={"agent": "claude", "prompt": "hello"})
         job_id = resp.json()["job_id"]
-
-        # Wait for worker to process
-        for _ in range(50):
-            job = job_queue.get(job_id)
-            if job and job.status in (JobStatus.done, JobStatus.failed):
-                break
-            time.sleep(0.05)
+        _wait_for_job(job_id)
 
         resp = client.get(f"/agent/jobs/{job_id}")
         data = resp.json()
@@ -257,12 +268,7 @@ class TestJobLifecycle:
 
         resp = client.post("/agent/run", json={"agent": "claude", "prompt": "hello"})
         job_id = resp.json()["job_id"]
-
-        for _ in range(50):
-            job = job_queue.get(job_id)
-            if job and job.status in (JobStatus.done, JobStatus.failed):
-                break
-            time.sleep(0.05)
+        _wait_for_job(job_id)
 
         resp = client.get(f"/agent/jobs/{job_id}")
         data = resp.json()
@@ -274,14 +280,35 @@ class TestJobLifecycle:
     def test_job_fails_on_missing_cli(self, mock_popen, client):
         resp = client.post("/agent/run", json={"agent": "claude", "prompt": "hello"})
         job_id = resp.json()["job_id"]
-
-        for _ in range(50):
-            job = job_queue.get(job_id)
-            if job and job.status in (JobStatus.done, JobStatus.failed):
-                break
-            time.sleep(0.05)
+        _wait_for_job(job_id)
 
         resp = client.get(f"/agent/jobs/{job_id}")
         data = resp.json()
         assert data["status"] == "failed"
         assert "CLI not found" in data["error"]
+
+    @patch("app.main.subprocess.Popen")
+    def test_concurrent_jobs_run_in_parallel(self, mock_popen, client):
+        barrier = __import__("threading").Barrier(2, timeout=5)
+
+        def slow_communicate(input=None, timeout=None):
+            barrier.wait()
+            return ('{"ok": true}', "")
+
+        def make_proc():
+            proc = MagicMock()
+            proc.communicate.side_effect = slow_communicate
+            proc.returncode = 0
+            return proc
+
+        mock_popen.side_effect = lambda *a, **kw: make_proc()
+
+        r1 = client.post("/agent/run", json={"agent": "claude", "prompt": "a"})
+        r2 = client.post("/agent/run", json={"agent": "claude", "prompt": "b"})
+        id1, id2 = r1.json()["job_id"], r2.json()["job_id"]
+
+        _wait_for_job(id1)
+        _wait_for_job(id2)
+
+        assert job_queue.get(id1).status == JobStatus.done
+        assert job_queue.get(id2).status == JobStatus.done
