@@ -92,32 +92,40 @@ class Job:
 # --- CLI Command Builder ---
 
 
-def build_claude_command(req: RunRequest) -> list[str]:
-    cmd = ["claude", "-p", req.prompt, "--output-format", "json"]
+def build_claude_command(req: RunRequest) -> tuple[list[str], str]:
+    """Build Claude CLI command. Returns (args, stdin_input).
+
+    Prompt is passed via stdin to avoid OS ARG_MAX limits on large inputs.
+    """
+    cmd = ["claude", "-p", "--output-format", "json"]
     if req.system_prompt:
         cmd.extend(["--system-prompt", req.system_prompt])
     if req.model:
         cmd.extend(["--model", req.model])
     if req.permissions == PermissionLevel.full:
         cmd.append("--dangerously-skip-permissions")
-    return cmd
+    return cmd, req.prompt
 
 
-def build_codex_command(req: RunRequest) -> list[str]:
+def build_codex_command(req: RunRequest) -> tuple[list[str], str]:
+    """Build Codex CLI command. Returns (args, stdin_input).
+
+    Prompt is passed via stdin to avoid OS ARG_MAX limits on large inputs.
+    """
     prompt = req.prompt
     if req.system_prompt:
         prompt = f"{req.system_prompt}\n\n{prompt}"
-    cmd = ["codex", "exec", prompt, "--json"]
+    cmd = ["codex", "exec", "-", "--json"]
     if req.model:
         cmd.extend(["-m", req.model])
     if req.cwd and req.cwd != "/workspace":
         cmd.extend(["-C", req.cwd])
     if req.permissions == PermissionLevel.full:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
-    return cmd
+    return cmd, prompt
 
 
-def build_command(req: RunRequest) -> list[str]:
+def build_command(req: RunRequest) -> tuple[list[str], str]:
     if req.agent == AgentType.claude:
         return build_claude_command(req)
     return build_codex_command(req)
@@ -199,11 +207,12 @@ class JobQueue:
     def _execute(self, job: Job) -> None:
         job.status = JobStatus.running
         job.start_time = time.time()
-        cmd = build_command(job.request)
+        cmd, stdin_input = build_command(job.request)
         cwd = job.request.cwd if job.request.agent == AgentType.claude else None
         try:
             proc = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,
@@ -211,7 +220,7 @@ class JobQueue:
             )
             job.process = proc
             try:
-                stdout, stderr = proc.communicate(timeout=job.request.timeout)
+                stdout, stderr = proc.communicate(input=stdin_input, timeout=job.request.timeout)
                 job.exit_code = proc.returncode
                 if proc.returncode == 0:
                     job.status = JobStatus.done
