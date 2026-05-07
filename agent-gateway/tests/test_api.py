@@ -245,6 +245,70 @@ class TestBuildCommand:
         cmd, _stdin = build_command(req)
         assert cmd[0] == "codex"
 
+    # --- agent_options tests ---
+
+    def test_claude_allowed_tools_string(self):
+        req = RunRequest(
+            agent=AgentType.claude,
+            prompt="test",
+            agent_options={"allowed_tools": "Bash,Read"},
+        )
+        cmd, _stdin = build_claude_command(req)
+        assert "--allowedTools" in cmd
+        idx = cmd.index("--allowedTools")
+        assert cmd[idx + 1] == "Bash,Read"
+
+    def test_claude_allowed_tools_list(self):
+        req = RunRequest(
+            agent=AgentType.claude,
+            prompt="test",
+            agent_options={"allowed_tools": ["Bash", "Read", "Write"]},
+        )
+        cmd, _stdin = build_claude_command(req)
+        assert "--allowedTools" in cmd
+        idx = cmd.index("--allowedTools")
+        assert cmd[idx + 1] == "Bash,Read,Write"
+
+    def test_claude_disallowed_tools(self):
+        req = RunRequest(
+            agent=AgentType.claude,
+            prompt="test",
+            agent_options={"disallowed_tools": "Edit"},
+        )
+        cmd, _stdin = build_claude_command(req)
+        assert "--disallowedTools" in cmd
+        idx = cmd.index("--disallowedTools")
+        assert cmd[idx + 1] == "Edit"
+
+    def test_claude_append_system_prompt(self):
+        req = RunRequest(
+            agent=AgentType.claude,
+            prompt="test",
+            agent_options={"append_system_prompt": "Always respond in JSON"},
+        )
+        cmd, _stdin = build_claude_command(req)
+        assert "--append-system-prompt" in cmd
+        idx = cmd.index("--append-system-prompt")
+        assert cmd[idx + 1] == "Always respond in JSON"
+
+    def test_codex_ignores_unknown_agent_options(self):
+        req = RunRequest(
+            agent=AgentType.codex,
+            prompt="test",
+            agent_options={"unknown_key": "value", "another": 42},
+        )
+        cmd, stdin = build_codex_command(req)
+        assert cmd == ["codex", "exec", "-", "--json"]
+        assert stdin == "test"
+
+    def test_agent_options_defaults_to_none(self):
+        req = RunRequest(agent=AgentType.claude, prompt="test")
+        assert req.agent_options is None
+        cmd, _stdin = build_claude_command(req)
+        assert "--allowedTools" not in cmd
+        assert "--disallowedTools" not in cmd
+        assert "--append-system-prompt" not in cmd
+
 
 # --- _extract_result_text ---
 
