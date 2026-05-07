@@ -9,6 +9,7 @@ from app.main import (
     JobStatus,
     PermissionLevel,
     RunRequest,
+    _extract_result_text,
     build_claude_command,
     build_codex_command,
     build_command,
@@ -243,6 +244,25 @@ class TestBuildCommand:
         req = RunRequest(agent=AgentType.codex, prompt="test")
         cmd, _stdin = build_command(req)
         assert cmd[0] == "codex"
+
+
+# --- _extract_result_text ---
+
+
+class TestExtractResultText:
+    def test_unwraps_claude_json_output(self):
+        stdout = '{"type":"result","subtype":"success","result":"hello world","stop_reason":"end_turn"}'
+        assert _extract_result_text(stdout) == "hello world"
+
+    def test_passes_through_plain_text(self):
+        assert _extract_result_text("just plain text") == "just plain text"
+
+    def test_passes_through_non_result_json(self):
+        stdout = '{"output": "done"}'
+        assert _extract_result_text(stdout) == '{"output": "done"}'
+
+    def test_passes_through_empty_string(self):
+        assert _extract_result_text("") == ""
 
 
 # --- Job lifecycle with mocked subprocess ---
