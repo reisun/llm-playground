@@ -48,6 +48,7 @@ class RunRequest(BaseModel):
     timeout: int = Field(default=1800, ge=1, le=7200)
     permissions: PermissionLevel = PermissionLevel.readonly
     image_path: str | None = None
+    agent_options: dict[str, Any] | None = None
 
 
 class JobInfo(BaseModel):
@@ -109,6 +110,21 @@ def build_claude_command(req: RunRequest) -> tuple[list[str], str]:
         cmd.extend(["--model", req.model])
     if req.permissions == PermissionLevel.full or req.image_path:
         cmd.append("--dangerously-skip-permissions")
+
+    if req.agent_options:
+        opts = req.agent_options
+        if "allowed_tools" in opts:
+            tools = opts["allowed_tools"]
+            if isinstance(tools, list):
+                tools = ",".join(tools)
+            cmd.extend(["--allowedTools", tools])
+        if "disallowed_tools" in opts:
+            tools = opts["disallowed_tools"]
+            if isinstance(tools, list):
+                tools = ",".join(tools)
+            cmd.extend(["--disallowedTools", tools])
+        if "append_system_prompt" in opts:
+            cmd.extend(["--append-system-prompt", opts["append_system_prompt"]])
 
     prompt = req.prompt
     if req.image_path:
