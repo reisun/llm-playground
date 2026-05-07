@@ -1,8 +1,11 @@
 .PHONY: test up stop restart logs health
 
-# Validate docker-compose.yml syntax
+# Run all checks: config validation, lint, format, unit tests
 test:
 	docker compose config > /dev/null
+	cd agent-gateway && .venv/bin/ruff check .
+	cd agent-gateway && .venv/bin/ruff format --check .
+	cd agent-gateway && .venv/bin/python -m pytest tests/
 
 # Start all services
 up:
