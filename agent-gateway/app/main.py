@@ -1,5 +1,6 @@
 """Agent Gateway - HTTP API for invoking Claude Code and Codex CLI agents."""
 
+import json
 import os
 import subprocess
 import threading
@@ -142,6 +143,23 @@ def build_command(req: RunRequest) -> tuple[list[str], str]:
     return build_codex_command(req)
 
 
+def _extract_result_text(stdout: str) -> str:
+    """Extract the result text from CLI JSON output.
+
+    Claude CLI with --output-format json wraps the actual response in
+    {"type":"result", "result":"<actual text>", ...}. This unwraps it
+    so callers receive only the model's response text.
+    Falls back to raw stdout if parsing fails or format is unexpected.
+    """
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, dict) and data.get("type") == "result" and "result" in data:
+            return data["result"]
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return stdout
+
+
 # --- Job Queue / Worker ---
 
 
@@ -255,7 +273,7 @@ class JobQueue:
                 job.exit_code = proc.returncode
                 if proc.returncode == 0:
                     job.status = JobStatus.done
-                    job.result = stdout
+                    job.result = _extract_result_text(stdout)
                 else:
                     job.status = JobStatus.failed
                     job.error = stderr or stdout
