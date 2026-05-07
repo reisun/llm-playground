@@ -17,7 +17,7 @@ services:
     container_name: agent-gateway
     volumes:
       - ~/.claude:/mnt/claude:ro
-      - ~/.claude.json:/root/.claude.json:ro
+      - ~/.claude.json:/home/appuser/.claude.json:ro
       - ~/.config/gh:/mnt/gh:ro
       - /home/reisun/workspace:/workspace
       - shared-data:/shared-data

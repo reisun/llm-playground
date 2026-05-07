@@ -33,6 +33,10 @@ COPY app/ ./app/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
+# Run as non-root user (required for --dangerously-skip-permissions)
+RUN useradd -m appuser
+USER appuser
+
 EXPOSE 8000
 
 ENTRYPOINT ["/app/entrypoint.sh"]
