@@ -217,6 +217,23 @@ class TestBuildCommand:
         cmd, _stdin = build_codex_command(req)
         assert "--dangerously-bypass-approvals-and-sandbox" in cmd
 
+    def test_claude_image_path_enables_permissions(self):
+        req = RunRequest(agent=AgentType.claude, prompt="analyze", image_path="/shared-data/img.jpg")
+        cmd, stdin = build_claude_command(req)
+        assert "--dangerously-skip-permissions" in cmd
+        assert "Read the image file at /shared-data/img.jpg" in stdin
+        assert stdin.endswith("analyze")
+
+    def test_claude_image_path_without_explicit_full(self):
+        req = RunRequest(
+            agent=AgentType.claude,
+            prompt="test",
+            permissions=PermissionLevel.readonly,
+            image_path="/data/frame.jpg",
+        )
+        cmd, _stdin = build_claude_command(req)
+        assert "--dangerously-skip-permissions" in cmd
+
     def test_build_command_dispatches_claude(self):
         req = RunRequest(agent=AgentType.claude, prompt="test")
         cmd, _stdin = build_command(req)
