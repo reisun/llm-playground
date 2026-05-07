@@ -7,12 +7,13 @@ if [ -d /mnt/claude ]; then
   ln -s /mnt/claude "$HOME/.claude"
 fi
 
-# Symlink .claude.json from .claude dir or backups
-if [ -f /mnt/claude/.claude.json ]; then
-  ln -sf /mnt/claude/.claude.json "$HOME/.claude.json"
-elif ls /mnt/claude/backups/.claude.json.backup.* 1>/dev/null 2>&1; then
-  latest=$(ls -t /mnt/claude/backups/.claude.json.backup.* | head -1)
-  ln -sf "$latest" "$HOME/.claude.json"
+# .claude.json is mounted directly via docker-compose volume.
+# Fallback to backup if mount is missing.
+if [ ! -f "$HOME/.claude.json" ]; then
+  if ls /mnt/claude/backups/.claude.json.backup.* 1>/dev/null 2>&1; then
+    latest=$(ls -t /mnt/claude/backups/.claude.json.backup.* | head -1)
+    cp "$latest" "$HOME/.claude.json"
+  fi
 fi
 
 if [ -d /mnt/gh ]; then
