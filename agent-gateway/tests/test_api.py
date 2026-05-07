@@ -144,71 +144,80 @@ class TestCancelJob:
 class TestBuildCommand:
     def test_claude_basic(self):
         req = RunRequest(agent=AgentType.claude, prompt="test prompt")
-        cmd = build_claude_command(req)
-        assert cmd == ["claude", "-p", "test prompt", "--output-format", "json"]
+        cmd, stdin = build_claude_command(req)
+        assert cmd == ["claude", "-p", "--output-format", "json"]
+        assert stdin == "test prompt"
 
     def test_claude_with_system_prompt(self):
         req = RunRequest(agent=AgentType.claude, prompt="test", system_prompt="be helpful")
-        cmd = build_claude_command(req)
+        cmd, _stdin = build_claude_command(req)
         assert "--system-prompt" in cmd
         assert "be helpful" in cmd
 
     def test_claude_with_model(self):
         req = RunRequest(agent=AgentType.claude, prompt="test", model="opus")
-        cmd = build_claude_command(req)
+        cmd, _stdin = build_claude_command(req)
         assert "--model" in cmd
         assert "opus" in cmd
 
     def test_claude_full_permissions(self):
         req = RunRequest(agent=AgentType.claude, prompt="test", permissions=PermissionLevel.full)
-        cmd = build_claude_command(req)
+        cmd, _stdin = build_claude_command(req)
         assert "--dangerously-skip-permissions" in cmd
 
     def test_claude_readonly_no_dangerous_flag(self):
         req = RunRequest(agent=AgentType.claude, prompt="test", permissions=PermissionLevel.readonly)
-        cmd = build_claude_command(req)
+        cmd, _stdin = build_claude_command(req)
         assert "--dangerously-skip-permissions" not in cmd
+
+    def test_claude_prompt_not_in_args(self):
+        req = RunRequest(agent=AgentType.claude, prompt="large prompt data")
+        cmd, stdin = build_claude_command(req)
+        assert "large prompt data" not in cmd
+        assert stdin == "large prompt data"
 
     def test_codex_basic(self):
         req = RunRequest(agent=AgentType.codex, prompt="test prompt")
-        cmd = build_codex_command(req)
-        assert cmd == ["codex", "exec", "test prompt", "--json"]
+        cmd, stdin = build_codex_command(req)
+        assert cmd == ["codex", "exec", "-", "--json"]
+        assert stdin == "test prompt"
 
     def test_codex_with_system_prompt(self):
         req = RunRequest(agent=AgentType.codex, prompt="test", system_prompt="be helpful")
-        cmd = build_codex_command(req)
-        assert cmd[2] == "be helpful\n\ntest"
+        cmd, stdin = build_codex_command(req)
+        assert "test" not in cmd
+        assert stdin == "be helpful\n\ntest"
 
     def test_codex_with_model(self):
         req = RunRequest(agent=AgentType.codex, prompt="test", model="gpt-4")
-        cmd = build_codex_command(req)
+        cmd, _stdin = build_codex_command(req)
         assert "-m" in cmd
         assert "gpt-4" in cmd
 
     def test_codex_with_custom_cwd(self):
         req = RunRequest(agent=AgentType.codex, prompt="test", cwd="/tmp")
-        cmd = build_codex_command(req)
+        cmd, _stdin = build_codex_command(req)
         assert "-C" in cmd
         assert "/tmp" in cmd
 
     def test_codex_default_cwd_no_flag(self):
         req = RunRequest(agent=AgentType.codex, prompt="test", cwd="/workspace")
-        cmd = build_codex_command(req)
+        cmd, _stdin = build_codex_command(req)
         assert "-C" not in cmd
 
     def test_codex_full_permissions(self):
         req = RunRequest(agent=AgentType.codex, prompt="test", permissions=PermissionLevel.full)
-        cmd = build_codex_command(req)
+        cmd, _stdin = build_codex_command(req)
         assert "--dangerously-bypass-approvals-and-sandbox" in cmd
 
     def test_build_command_dispatches_claude(self):
         req = RunRequest(agent=AgentType.claude, prompt="test")
-        cmd = build_command(req)
+        cmd, _stdin = build_command(req)
         assert cmd[0] == "claude"
 
     def test_build_command_dispatches_codex(self):
         req = RunRequest(agent=AgentType.codex, prompt="test")
-        cmd = build_command(req)
+        cmd, _stdin = build_command(req)
         assert cmd[0] == "codex"
 
 
