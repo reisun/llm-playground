@@ -46,6 +46,7 @@ class RunRequest(BaseModel):
     system_prompt: str | None = None
     timeout: int = Field(default=1800, ge=1, le=7200)
     permissions: PermissionLevel = PermissionLevel.readonly
+    image_path: str | None = None
 
 
 class JobInfo(BaseModel):
@@ -105,9 +106,16 @@ def build_claude_command(req: RunRequest) -> tuple[list[str], str]:
         cmd.extend(["--system-prompt", req.system_prompt])
     if req.model:
         cmd.extend(["--model", req.model])
-    if req.permissions == PermissionLevel.full:
+    if req.permissions == PermissionLevel.full or req.image_path:
         cmd.append("--dangerously-skip-permissions")
-    return cmd, req.prompt
+
+    prompt = req.prompt
+    if req.image_path:
+        prompt = (
+            f"Read the image file at {req.image_path} and analyze it. "
+            f"Respond with ONLY the requested format, no extra text.\n\n{prompt}"
+        )
+    return cmd, prompt
 
 
 def build_codex_command(req: RunRequest) -> tuple[list[str], str]:

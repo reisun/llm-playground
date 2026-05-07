@@ -19,6 +19,7 @@ services:
       - ~/.claude:/mnt/claude:ro
       - ~/.config/gh:/mnt/gh:ro
       - /home/reisun/workspace:/workspace
+      - shared-data:/shared-data
     networks:
       - llm-network
     restart: unless-stopped
@@ -37,6 +38,8 @@ services:
 
 volumes:
   ollama-data:
+  shared-data:
+    name: shared-data
 
 networks:
   llm-network:
