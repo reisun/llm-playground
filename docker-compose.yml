@@ -21,6 +21,8 @@ services:
       - ~/.config/gh:/mnt/gh:ro
       - /home/reisun/workspace:/workspace
       - shared-data:/shared-data
+      - ./agent-gateway/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     networks:
       - llm-network
     restart: unless-stopped
