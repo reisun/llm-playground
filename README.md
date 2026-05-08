@@ -1,6 +1,7 @@
 # llm-playground
 
-Docker Compose で Ollama + Open WebUI をすぐに動かせる LLM 実験環境です。
+Docker Compose で Ollama + Open WebUI + Agent Gateway を動かせる LLM 実験環境です。
+ローカル LLM の推論に加え、Claude Code CLI / Codex CLI を HTTP API としてラップする Agent Gateway を提供します。
 
 ## 前提条件
 
@@ -26,6 +27,41 @@ docker compose up -d
 ```
 
 初回起動時は Docker イメージのダウンロードに数分かかります。
+
+## Agent Gateway
+
+Claude Code CLI および Codex CLI を HTTP API としてラップする FastAPI ベースのゲートウェイサービスです。
+他プロジェクト（splatoon-battle-analyzer 等）から LLM を活用した分析処理を呼び出す際に使用します。
+
+### API エンドポイント
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| POST | `/agent/run` | ジョブを投入（エージェント種別、プロンプト、モデル等を指定） |
+| GET | `/agent/jobs/{job_id}` | 指定ジョブの状態・結果を取得 |
+| GET | `/agent/jobs` | 全ジョブ一覧を取得 |
+| DELETE | `/agent/jobs/{job_id}` | 指定ジョブを削除 |
+| GET | `/health` | ヘルスチェック |
+
+### リクエストパラメータ（POST /agent/run）
+
+- `agent`: エージェント種別（`claude` / `codex`）
+- `prompt`: 実行プロンプト
+- `model`: 使用モデル
+- `system_prompt`: システムプロンプト
+- `image_paths`: 画像パス一覧
+- `timeout`: タイムアウト秒数
+- `permission`: パーミッションレベル
+
+### nginx 内部プロキシ
+
+`internal-proxy`（nginx）が Docker ネットワーク内のリクエストを振り分けます。
+
+| パス | 転送先 |
+|------|--------|
+| `/llm/` | Ollama |
+| `/agent/` | agent-gateway |
+| `/health` | agent-gateway ヘルスチェック |
 
 ## モデルの追加
 
@@ -151,3 +187,9 @@ docker compose logs -f
 docker compose logs -f ollama
 docker compose logs -f open-webui
 ```
+
+## 関連プロジェクト
+
+- [splatoon-battle-analyzer](https://github.com/reisun/splatoon-battle-analyzer) - agent-gateway を利用したスプラトゥーン動画ハイライト検出
+- [splat-highlight-pilot](https://github.com/reisun/splat-highlight-pilot) - ハイライト自動切り出しオーケストレーター
+- [movie-edit-pilot](https://github.com/reisun/movie-edit-pilot) - FFmpeg ベース動画クリッピング API
