@@ -15,6 +15,9 @@ services:
   agent-gateway:
     build: ./agent-gateway
     container_name: agent-gateway
+    environment:
+      - CLAUDE_SETUP_TOKEN=${CLAUDE_SETUP_TOKEN:-}
+      - CLAUDE_TOKEN_EXPIRES_AT=${CLAUDE_TOKEN_EXPIRES_AT:-}
     volumes:
       - ~/.claude:/mnt/claude:ro
       - ~/.claude.json:/home/appuser/.claude.json:ro

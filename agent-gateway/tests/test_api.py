@@ -10,9 +10,11 @@ from app.main import (
     PermissionLevel,
     RunRequest,
     _extract_result_text,
+    _is_auth_error,
     build_claude_command,
     build_codex_command,
     build_command,
+    check_token_expiry,
     job_queue,
 )
 
@@ -413,3 +415,251 @@ class TestJobLifecycle:
 
         assert job_queue.get(id1).status == JobStatus.done
         assert job_queue.get(id2).status == JobStatus.done
+
+
+# --- Token Expiry Check ---
+
+
+class TestCheckTokenExpiry:
+    def test_no_env_var(self):
+        with patch.dict("os.environ", {}, clear=True):
+            days, warning = check_token_expiry()
+            assert days is None
+            assert warning is None
+
+    def test_empty_env_var(self):
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": ""}):
+            days, warning = check_token_expiry()
+            assert days is None
+            assert warning is None
+
+    def test_invalid_format(self):
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": "not-a-date"}):
+            days, warning = check_token_expiry()
+            assert days is None
+            assert warning is None
+
+    @patch("app.main.date")
+    def test_token_not_expiring_soon(self, mock_date):
+        from datetime import date as real_date
+
+        mock_date.today.return_value = real_date(2026, 1, 1)
+        mock_date.side_effect = lambda *a, **kw: real_date(*a, **kw)
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": "2026-12-31"}):
+            days, warning = check_token_expiry()
+            assert days == 364
+            assert warning is None
+
+    @patch("app.main.date")
+    def test_token_expiring_soon(self, mock_date):
+        from datetime import date as real_date
+
+        mock_date.today.return_value = real_date(2026, 6, 10)
+        mock_date.side_effect = lambda *a, **kw: real_date(*a, **kw)
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": "2026-06-25"}):
+            days, warning = check_token_expiry()
+            assert days == 15
+            assert warning is not None
+            assert "15 day(s)" in warning
+
+    @patch("app.main.date")
+    def test_token_expired(self, mock_date):
+        from datetime import date as real_date
+
+        mock_date.today.return_value = real_date(2026, 7, 5)
+        mock_date.side_effect = lambda *a, **kw: real_date(*a, **kw)
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": "2026-07-01"}):
+            days, warning = check_token_expiry()
+            assert days == -4
+            assert warning is not None
+            assert "expired" in warning
+
+
+# --- Health endpoint with token info ---
+
+
+class TestHealthTokenInfo:
+    @patch("app.main.date")
+    def test_health_includes_token_info_when_set(self, mock_date, client):
+        from datetime import date as real_date
+
+        mock_date.today.return_value = real_date(2026, 1, 1)
+        mock_date.side_effect = lambda *a, **kw: real_date(*a, **kw)
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": "2026-12-31"}):
+            resp = client.get("/health")
+            data = resp.json()
+            assert data["status"] == "ok"
+            assert data["token_expires_at"] == "2026-12-31"
+            assert data["token_days_remaining"] == 364
+            assert "token_warning" not in data
+
+    def test_health_no_token_info_when_unset(self, client):
+        with patch.dict("os.environ", {}, clear=False):
+            env = dict(**__import__("os").environ)
+            env.pop("CLAUDE_TOKEN_EXPIRES_AT", None)
+            with patch.dict("os.environ", env, clear=True):
+                resp = client.get("/health")
+                data = resp.json()
+                assert "token_expires_at" not in data
+                assert "token_days_remaining" not in data
+
+    @patch("app.main.date")
+    def test_health_includes_warning_when_expiring(self, mock_date, client):
+        from datetime import date as real_date
+
+        mock_date.today.return_value = real_date(2026, 6, 20)
+        mock_date.side_effect = lambda *a, **kw: real_date(*a, **kw)
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": "2026-06-25"}):
+            resp = client.get("/health")
+            data = resp.json()
+            assert "token_warning" in data
+            assert "5 day(s)" in data["token_warning"]
+
+
+# --- Job warnings ---
+
+
+class TestJobWarnings:
+    @patch("app.main.subprocess.Popen")
+    @patch("app.main.date")
+    def test_claude_job_includes_token_warning(self, mock_date, mock_popen, client):
+        from datetime import date as real_date
+
+        mock_date.today.return_value = real_date(2026, 6, 20)
+        mock_date.side_effect = lambda *a, **kw: real_date(*a, **kw)
+
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ('{"type":"result","result":"ok"}', "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": "2026-06-25"}):
+            resp = client.post("/agent/run", json={"agent": "claude", "prompt": "hello"})
+            job_id = resp.json()["job_id"]
+            _wait_for_job(job_id)
+
+            resp = client.get(f"/agent/jobs/{job_id}")
+            data = resp.json()
+            assert data["status"] == "done"
+            assert "warnings" in data
+            assert any("5 day(s)" in w for w in data["warnings"])
+
+    @patch("app.main.subprocess.Popen")
+    def test_codex_job_no_token_warning(self, mock_popen, client):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ('{"ok": true}', "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": "2026-06-25"}):
+            resp = client.post("/agent/run", json={"agent": "codex", "prompt": "hello"})
+            job_id = resp.json()["job_id"]
+            _wait_for_job(job_id)
+
+            resp = client.get(f"/agent/jobs/{job_id}")
+            data = resp.json()
+            assert data["status"] == "done"
+            assert "warnings" not in data
+
+    @patch("app.main.subprocess.Popen")
+    def test_no_warnings_when_token_not_expiring(self, mock_popen, client):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ('{"type":"result","result":"ok"}', "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        with patch.dict("os.environ", {}, clear=False):
+            env = dict(**__import__("os").environ)
+            env.pop("CLAUDE_TOKEN_EXPIRES_AT", None)
+            with patch.dict("os.environ", env, clear=True):
+                resp = client.post("/agent/run", json={"agent": "claude", "prompt": "hello"})
+                job_id = resp.json()["job_id"]
+                _wait_for_job(job_id)
+
+                resp = client.get(f"/agent/jobs/{job_id}")
+                data = resp.json()
+                assert data["status"] == "done"
+                assert "warnings" not in data
+
+
+# --- Auth error detection ---
+
+
+class TestIsAuthError:
+    def test_detects_unauthorized(self):
+        assert _is_auth_error("Error: Unauthorized access") is True
+
+    def test_detects_401(self):
+        assert _is_auth_error("HTTP 401 response") is True
+
+    def test_detects_token(self):
+        assert _is_auth_error("Invalid token") is True
+
+    def test_ignores_normal_error(self):
+        assert _is_auth_error("Syntax error in file.py") is False
+
+
+class TestAuthErrorInJob:
+    @patch("app.main.subprocess.Popen")
+    @patch("app.main.date")
+    def test_expired_token_appends_to_error(self, mock_date, mock_popen, client):
+        from datetime import date as real_date
+
+        mock_date.today.return_value = real_date(2026, 8, 1)
+        mock_date.side_effect = lambda *a, **kw: real_date(*a, **kw)
+
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ("", "some error")
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        with patch.dict("os.environ", {"CLAUDE_TOKEN_EXPIRES_AT": "2026-07-01"}):
+            resp = client.post("/agent/run", json={"agent": "claude", "prompt": "hello"})
+            job_id = resp.json()["job_id"]
+            _wait_for_job(job_id)
+
+            resp = client.get(f"/agent/jobs/{job_id}")
+            data = resp.json()
+            assert data["status"] == "failed"
+            assert "[token-expired]" in data["error"]
+
+    @patch("app.main.subprocess.Popen")
+    def test_auth_error_hint_appended(self, mock_popen, client):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ("", "Error: Unauthorized")
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        with patch.dict("os.environ", {}, clear=False):
+            env = dict(**__import__("os").environ)
+            env.pop("CLAUDE_TOKEN_EXPIRES_AT", None)
+            with patch.dict("os.environ", env, clear=True):
+                resp = client.post("/agent/run", json={"agent": "claude", "prompt": "hello"})
+                job_id = resp.json()["job_id"]
+                _wait_for_job(job_id)
+
+                resp = client.get(f"/agent/jobs/{job_id}")
+                data = resp.json()
+                assert data["status"] == "failed"
+                assert "[auth-hint]" in data["error"]
+
+    @patch("app.main.subprocess.Popen")
+    def test_non_auth_error_no_hint(self, mock_popen, client):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = ("", "Syntax error")
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        with patch.dict("os.environ", {}, clear=False):
+            env = dict(**__import__("os").environ)
+            env.pop("CLAUDE_TOKEN_EXPIRES_AT", None)
+            with patch.dict("os.environ", env, clear=True):
+                resp = client.post("/agent/run", json={"agent": "claude", "prompt": "hello"})
+                job_id = resp.json()["job_id"]
+                _wait_for_job(job_id)
+
+                resp = client.get(f"/agent/jobs/{job_id}")
+                data = resp.json()
+                assert data["status"] == "failed"
+                assert "[auth-hint]" not in data["error"]
+                assert "[token-expired]" not in data["error"]
