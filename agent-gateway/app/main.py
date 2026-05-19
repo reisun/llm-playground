@@ -7,11 +7,14 @@ import threading
 import time
 import uuid
 from collections import deque
+from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
+
+TOKEN_EXPIRY_WARNING_DAYS = 30
 
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "4"))
 
@@ -59,6 +62,7 @@ class JobInfo(BaseModel):
     result: Any | None = None
     error: str | None = None
     exit_code: int | None = None
+    warnings: list[str] | None = None
 
 
 # --- Job Store ---
@@ -75,6 +79,7 @@ class Job:
         self.start_time: float | None = None
         self.end_time: float | None = None
         self.process: subprocess.Popen | None = None
+        self.warnings: list[str] = []
 
     @property
     def elapsed(self) -> float | None:
@@ -92,7 +97,32 @@ class Job:
             result=self.result if self.status == JobStatus.done else None,
             error=self.error if self.status == JobStatus.failed else None,
             exit_code=self.exit_code,
+            warnings=self.warnings if self.warnings else None,
         )
+
+
+# --- Token Expiry Check ---
+
+
+def check_token_expiry() -> tuple[int | None, str | None]:
+    """Check CLAUDE_TOKEN_EXPIRES_AT and return (days_remaining, warning_or_None).
+
+    Returns (None, None) if the env var is not set or unparseable.
+    """
+    raw = os.environ.get("CLAUDE_TOKEN_EXPIRES_AT")
+    if not raw:
+        return None, None
+    try:
+        expires = datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        return None, None
+    remaining = (expires - date.today()).days
+    renew = "Run `claude setup-token` to renew."
+    if remaining < 0:
+        return remaining, f"Claude token expired {-remaining} day(s) ago. {renew}"
+    if remaining <= TOKEN_EXPIRY_WARNING_DAYS:
+        return remaining, f"Claude token expires in {remaining} day(s) ({expires.isoformat()}). {renew}"
+    return remaining, None
 
 
 # --- CLI Command Builder ---
@@ -174,6 +204,14 @@ def _extract_result_text(stdout: str) -> str:
     except (json.JSONDecodeError, ValueError):
         pass
     return stdout
+
+
+_AUTH_ERROR_PATTERNS = ["auth", "unauthorized", "401", "token", "credential", "login", "permission denied"]
+
+
+def _is_auth_error(error_text: str) -> bool:
+    lower = error_text.lower()
+    return any(p in lower for p in _AUTH_ERROR_PATTERNS)
 
 
 # --- Job Queue / Worker ---
@@ -292,7 +330,22 @@ class JobQueue:
                     job.result = _extract_result_text(stdout)
                 else:
                     job.status = JobStatus.failed
-                    job.error = stderr or stdout
+                    error_text = stderr or stdout
+                    if job.request.agent == AgentType.claude:
+                        days, _w = check_token_expiry()
+                        if days is not None and days < 0:
+                            error_text += (
+                                f"\n[token-expired] Claude token expired"
+                                f" {-days} day(s) ago."
+                                f" Run `claude setup-token` to renew."
+                            )
+                        elif _is_auth_error(error_text):
+                            error_text += (
+                                "\n[auth-hint] This may be an authentication"
+                                " issue. Check CLAUDE_SETUP_TOKEN or run"
+                                " `claude setup-token`."
+                            )
+                    job.error = error_text
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
@@ -309,6 +362,10 @@ class JobQueue:
             job.exit_code = -1
         finally:
             job.end_time = time.time()
+            if job.request.agent == AgentType.claude:
+                _days, warning = check_token_expiry()
+                if warning:
+                    job.warnings.append(warning)
 
 
 # --- Global queue instance ---
@@ -358,9 +415,16 @@ def cancel_job(job_id: str) -> dict:
 
 @app.get("/health")
 def health() -> dict:
-    return {
+    data: dict[str, Any] = {
         "status": "ok",
         "queue_length": job_queue.queue_length,
         "running_jobs": sorted(job_queue.running_job_ids),
         "max_concurrent": job_queue.max_workers,
     }
+    days_remaining, warning = check_token_expiry()
+    if days_remaining is not None:
+        data["token_expires_at"] = os.environ.get("CLAUDE_TOKEN_EXPIRES_AT")
+        data["token_days_remaining"] = days_remaining
+    if warning:
+        data["token_warning"] = warning
+    return data
