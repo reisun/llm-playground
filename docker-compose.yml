@@ -25,6 +25,7 @@ services:
       - /home/reisun/workspace:/workspace
       - shared-data:/shared-data
       - ./agent-gateway/app:/app/app
+      - /var/run/docker.sock:/var/run/docker.sock
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     networks:
       - llm-network
