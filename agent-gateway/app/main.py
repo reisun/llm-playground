@@ -51,6 +51,7 @@ class RunRequest(BaseModel):
     timeout: int = Field(default=1800, ge=1, le=7200)
     permissions: PermissionLevel = PermissionLevel.readonly
     image_path: str | None = None
+    image_paths: list[str] | None = None
     agent_options: dict[str, Any] | None = None
 
 
@@ -138,7 +139,7 @@ def build_claude_command(req: RunRequest) -> tuple[list[str], str]:
         cmd.extend(["--system-prompt", req.system_prompt])
     if req.model:
         cmd.extend(["--model", req.model])
-    if req.permissions == PermissionLevel.full or req.image_path:
+    if req.permissions == PermissionLevel.full or req.image_path or req.image_paths:
         cmd.append("--dangerously-skip-permissions")
 
     if req.agent_options:
@@ -157,7 +158,13 @@ def build_claude_command(req: RunRequest) -> tuple[list[str], str]:
             cmd.extend(["--append-system-prompt", opts["append_system_prompt"]])
 
     prompt = req.prompt
-    if req.image_path:
+    if req.image_paths:
+        paths_str = ", ".join(req.image_paths)
+        prompt = (
+            f"Read the image files at {paths_str} and analyze them. "
+            f"Respond with ONLY the requested format, no extra text.\n\n{prompt}"
+        )
+    elif req.image_path:
         prompt = (
             f"Read the image file at {req.image_path} and analyze it. "
             f"Respond with ONLY the requested format, no extra text.\n\n{prompt}"

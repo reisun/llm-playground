@@ -237,6 +237,52 @@ class TestBuildCommand:
         cmd, _stdin = build_claude_command(req)
         assert "--dangerously-skip-permissions" in cmd
 
+    def test_claude_image_paths_multiple(self):
+        req = RunRequest(
+            agent=AgentType.claude,
+            prompt="analyze these",
+            image_paths=["/data/a.jpg", "/data/b.png", "/data/c.jpg"],
+        )
+        cmd, stdin = build_claude_command(req)
+        assert "--dangerously-skip-permissions" in cmd
+        assert "Read the image files at /data/a.jpg, /data/b.png, /data/c.jpg" in stdin
+        assert "and analyze them" in stdin
+        assert stdin.endswith("analyze these")
+
+    def test_claude_image_paths_single_element(self):
+        req = RunRequest(
+            agent=AgentType.claude,
+            prompt="analyze this",
+            image_paths=["/data/only.jpg"],
+        )
+        cmd, stdin = build_claude_command(req)
+        assert "--dangerously-skip-permissions" in cmd
+        assert "Read the image files at /data/only.jpg" in stdin
+        assert stdin.endswith("analyze this")
+
+    def test_claude_image_path_singular_backward_compat(self):
+        req = RunRequest(
+            agent=AgentType.claude,
+            prompt="analyze",
+            image_path="/shared-data/img.jpg",
+        )
+        cmd, stdin = build_claude_command(req)
+        assert "--dangerously-skip-permissions" in cmd
+        assert "Read the image file at /shared-data/img.jpg" in stdin
+        assert "and analyze it" in stdin
+        assert stdin.endswith("analyze")
+
+    def test_claude_image_paths_takes_precedence_over_image_path(self):
+        req = RunRequest(
+            agent=AgentType.claude,
+            prompt="analyze",
+            image_path="/old/single.jpg",
+            image_paths=["/new/a.jpg", "/new/b.jpg"],
+        )
+        cmd, stdin = build_claude_command(req)
+        assert "Read the image files at /new/a.jpg, /new/b.jpg" in stdin
+        assert "/old/single.jpg" not in stdin
+
     def test_build_command_dispatches_claude(self):
         req = RunRequest(agent=AgentType.claude, prompt="test")
         cmd, _stdin = build_command(req)
